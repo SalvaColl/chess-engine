@@ -1,0 +1,16 @@
+*.exe
+*.o
+*.obj
+
+build/
+dist/
+*.spec
+*.zip
+
+__pycache__/
+*.pyc
+venv/
+.env/
+
+.vscode/
+.idea/
