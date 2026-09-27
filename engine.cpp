@@ -293,6 +293,9 @@ int qsearch(int alpha, int beta, int ply) {
     
     if (in_check) {
         movegen::legalmoves(moves, board);
+        if (moves.empty()) {
+            return -INF + ply;
+        }
     } else {
         movegen::legalmoves<movegen::MoveGenType::CAPTURE>(moves, board);
     }
