@@ -3,13 +3,6 @@ import chess
 import subprocess
 import sys
 
-human_color = chess.WHITE
-if len(sys.argv) > 1 and sys.argv[1].lower() == "black":
-    human_color = chess.BLACK
-    print("You are playing as Black.")
-else:
-    print("You are playing as White.")
-
 ENGINE_PATH = "./engine.exe"
 engine = subprocess.Popen(
     [ENGINE_PATH],
@@ -54,13 +47,6 @@ pygame.display.set_caption("CP Chess Engine")
 pygame.font.init()
 ui_font = pygame.font.SysFont("segoeui", 22, bold=True)
 ui_font_small = pygame.font.SysFont("segoeui", 18)
-
-current_eval = 0.0
-current_eval_text = "0.00"
-current_depth = "0 / 0"
-current_nps = 0
-current_pv = ""
-
 font = pygame.font.SysFont("segoeuisymbol", int(SQ_SIZE * 0.8))
 
 WHITE_SQUARE = (240, 217, 181)
@@ -73,7 +59,29 @@ PIECE_UNICODE = {
     'p': '♟', 'n': '♞', 'b': '♝', 'r': '♜', 'q': '♛', 'k': '♚'
 }
 
-def draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, eval_score, eval_text_str, depth_str, nps_val, pv_str):
+def choose_color_menu():
+    screen.fill((40, 40, 40))
+    title = ui_font.render("CP Chess Engine", True, (255, 255, 255))
+    inst_w = ui_font.render("Press 'W' to play as White", True, (200, 255, 200))
+    inst_b = ui_font.render("Press 'B' to play as Black", True, (200, 200, 255))
+    
+    screen.blit(title, (WIDTH // 2 - title.get_width() // 2, HEIGHT // 2 - 60))
+    screen.blit(inst_w, (WIDTH // 2 - inst_w.get_width() // 2, HEIGHT // 2))
+    screen.blit(inst_b, (WIDTH // 2 - inst_b.get_width() // 2, HEIGHT // 2 + 40))
+    pygame.display.flip()
+    
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_w:
+                    return chess.WHITE
+                elif event.key == pygame.K_b:
+                    return chess.BLACK
+
+def draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, eval_score, eval_text_str, depth_str, nps_val, pv_str, human_color):
     for r in range(8):
         for c in range(8):
             color = WHITE_SQUARE if (r + c) % 2 == 0 else BLACK_SQUARE
@@ -151,20 +159,64 @@ def draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares
     screen.blit(pv_surf_1, (text_x, 220))
     screen.blit(pv_surf_2, (text_x, 240))
 
-board = chess.Board()
-selected_sq = None
-valid_moves = []
+def draw_game_over_overlay(board, is_drawn):
+    overlay = pygame.Surface((BOARD_SIZE, HEIGHT))
+    overlay.set_alpha(200)
+    overlay.fill((0, 0, 0))
+    screen.blit(overlay, (0, 0))
+    
+    if board.is_checkmate():
+        winner = "White" if board.turn == chess.BLACK else "Black"
+        result_text = f"Checkmate - {winner} Wins!"
+    elif is_drawn or board.is_stalemate() or board.is_insufficient_material():
+        result_text = "Draw!"
+    else:
+        result_text = "Game Over"
+
+    text1 = ui_font.render(result_text, True, (255, 255, 255))
+    text2 = ui_font.render("Press 'R' to Restart", True, (200, 200, 200))
+    
+    screen.blit(text1, (BOARD_SIZE // 2 - text1.get_width() // 2, HEIGHT // 2 - 30))
+    screen.blit(text2, (BOARD_SIZE // 2 - text2.get_width() // 2, HEIGHT // 2 + 20))
+
+def reset_game():
+    global board, selected_sq, valid_moves, last_move, right_clicked_squares
+    global current_eval, current_eval_text, current_depth, current_nps, current_pv
+    global human_color
+    
+    board = chess.Board()
+    selected_sq = None
+    valid_moves = []
+    last_move = None
+    right_clicked_squares = set()
+    
+    current_eval = 0.0
+    current_eval_text = "0.00"
+    current_depth = "0 / 0"
+    current_nps = 0
+    current_pv = ""
+    
+    send_command("ucinewgame")
+    human_color = choose_color_menu()
+
+reset_game()
 running = True
-game_over_printed = False
-last_move = None
-right_clicked_squares = set()
 
 while running:
+    is_drawn = board.can_claim_draw() or board.is_repetition() or board.is_fifty_moves()
+    game_is_over = board.is_game_over() or is_drawn
+    
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
             
-        elif event.type == pygame.MOUSEBUTTONDOWN:
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_r:
+                reset_game()
+                game_is_over = False
+                continue
+                
+        elif event.type == pygame.MOUSEBUTTONDOWN and not game_is_over:
             x, y = pygame.mouse.get_pos()
             col = x // SQ_SIZE
             row = y // SQ_SIZE
@@ -209,17 +261,18 @@ while running:
                 else:
                     right_clicked_squares.add(sq)    
 
-    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_eval_text, current_depth, current_nps, current_pv)
-    pygame.display.flip()
-
-    is_drawn = board.can_claim_draw()
+    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_eval_text, current_depth, current_nps, current_pv, human_color)
     
-    if board.turn != human_color and not board.is_game_over() and not is_drawn:
+    if game_is_over:
+        draw_game_over_overlay(board, is_drawn)
+        
+    pygame.display.flip()
+    
+    if board.turn != human_color and not game_is_over:
         pygame.event.pump() 
         
         move_history = " ".join([m.uci() for m in board.move_stack])
         send_command(f"position startpos moves {move_history}")
-        
         send_command("go movetime 1000")
         
         while True:
@@ -227,7 +280,6 @@ while running:
             line = engine.stdout.readline().strip()
             
             if line:
-                print(line)
                 parts = line.split()
                 
                 if "info" in parts and "depth" in parts:
@@ -258,12 +310,12 @@ while running:
 
                         if "pv" in parts:
                             pv_idx = parts.index("pv")
-                            current_pv = " ".join(parts[pv_idx + 1: pv_idx + 5]) # Keep just the first 4 moves
+                            current_pv = " ".join(parts[pv_idx + 1: pv_idx + 5])
 
                     except (ValueError, IndexError):
                         pass
                     
-                    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_eval_text, current_depth, current_nps, current_pv)
+                    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_eval_text, current_depth, current_nps, current_pv, human_color)
                     pygame.display.flip()
 
             if line.startswith("bestmove"):
@@ -275,7 +327,6 @@ while running:
             is_capture = board.is_capture(engine_move)
             
             pygame.time.wait(400)
-            
             board.push(engine_move)
             last_move = engine_move
             
@@ -283,13 +334,6 @@ while running:
                 capture_sound.play()
             elif move_sound:
                 move_sound.play()
-
-    if (board.is_game_over() or is_drawn) and not game_over_printed:
-        if is_drawn:
-            print("Game Over: Draw (Repetition or 50-Move Rule)")
-        else:
-            print("Game Over:", board.result())
-        game_over_printed = True
 
 engine.terminate()
 pygame.quit()
