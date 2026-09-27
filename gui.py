@@ -56,8 +56,10 @@ ui_font = pygame.font.SysFont("segoeui", 22, bold=True)
 ui_font_small = pygame.font.SysFont("segoeui", 18)
 
 current_eval = 0.0
-current_tt = 0
-current_nmp = 0
+current_eval_text = "0.00"
+current_depth = "0 / 0"
+current_nps = 0
+current_pv = ""
 
 font = pygame.font.SysFont("segoeuisymbol", int(SQ_SIZE * 0.8))
 
@@ -71,7 +73,7 @@ PIECE_UNICODE = {
     'p': '♟', 'n': '♞', 'b': '♝', 'r': '♜', 'q': '♛', 'k': '♚'
 }
 
-def draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, eval_score, tt_hits, nmp_hits):
+def draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, eval_score, eval_text_str, depth_str, nps_val, pv_str):
     for r in range(8):
         for c in range(8):
             color = WHITE_SQUARE if (r + c) % 2 == 0 else BLACK_SQUARE
@@ -115,28 +117,39 @@ def draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares
     pygame.draw.rect(screen, (40, 40, 40), (BOARD_SIZE, 0, SIDEBAR_WIDTH, HEIGHT))
 
     clamped_eval = max(-10.0, min(10.0, eval_score))
-    
     white_percentage = 0.5 + (clamped_eval / 20.0)
     white_height = int(HEIGHT * white_percentage)
     black_height = HEIGHT - white_height
     
-    pygame.draw.rect(screen, (20, 20, 20), (BOARD_SIZE, 0, 30, black_height)) # Black bar
-    pygame.draw.rect(screen, (230, 230, 230), (BOARD_SIZE, black_height, 30, white_height)) # White bar
+    pygame.draw.rect(screen, (20, 20, 20), (BOARD_SIZE, 0, 30, black_height)) 
+    pygame.draw.rect(screen, (230, 230, 230), (BOARD_SIZE, black_height, 30, white_height)) 
     
     text_x = BOARD_SIZE + 45
     
-    eval_text = ui_font.render(f"Eval: {eval_score:+.2f}", True, (255, 255, 255))
-    screen.blit(eval_text, (text_x, 20))
+    eval_surface = ui_font.render(f"Eval: {eval_text_str}", True, (255, 255, 255))
+    screen.blit(eval_surface, (text_x, 20))
     
-    tt_text = ui_font_small.render(f"TT Cutoffs:", True, (150, 150, 150))
-    tt_val = ui_font_small.render(f"{tt_hits:,}", True, (200, 200, 255))
-    screen.blit(tt_text, (text_x, 80))
-    screen.blit(tt_val, (text_x, 100))
+    depth_text = ui_font_small.render("Depth:", True, (150, 150, 150))
+    depth_val = ui_font_small.render(f"{depth_str}", True, (200, 200, 255))
+    screen.blit(depth_text, (text_x, 80))
+    screen.blit(depth_val, (text_x, 100))
     
-    nmp_text = ui_font_small.render(f"NMP Cutoffs:", True, (150, 150, 150))
-    nmp_val = ui_font_small.render(f"{nmp_hits:,}", True, (255, 150, 150))
-    screen.blit(nmp_text, (text_x, 140))
-    screen.blit(nmp_val, (text_x, 160))
+    nps_text = ui_font_small.render("Speed:", True, (150, 150, 150))
+    nps_val_surf = ui_font_small.render(f"{nps_val:,} NPS", True, (255, 200, 150))
+    screen.blit(nps_text, (text_x, 140))
+    screen.blit(nps_val_surf, (text_x, 160))
+    
+    pv_label = ui_font_small.render("Best Line:", True, (150, 150, 150))
+    screen.blit(pv_label, (text_x, 200))
+    
+    words = pv_str.split()
+    pv_line_1 = " ".join(words[:2]) if len(words) > 0 else ""
+    pv_line_2 = " ".join(words[2:4]) if len(words) > 2 else ""
+    
+    pv_surf_1 = ui_font_small.render(pv_line_1, True, (150, 255, 150))
+    pv_surf_2 = ui_font_small.render(pv_line_2, True, (150, 255, 150))
+    screen.blit(pv_surf_1, (text_x, 220))
+    screen.blit(pv_surf_2, (text_x, 240))
 
 board = chess.Board()
 selected_sq = None
@@ -196,7 +209,7 @@ while running:
                 else:
                     right_clicked_squares.add(sq)    
 
-    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_tt, current_nmp)
+    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_eval_text, current_depth, current_nps, current_pv)
     pygame.display.flip()
 
     is_drawn = board.can_claim_draw()
@@ -217,26 +230,40 @@ while running:
                 print(line)
                 parts = line.split()
                 
-                if "score" in parts:
+                if "info" in parts and "depth" in parts:
                     try:
-                        if "cp" in parts:
-                            raw_score = int(parts[parts.index("cp") + 1])
-                        else:
-                            raw_score = int(parts[parts.index("score") + 1])
+                        depth = parts[parts.index("depth") + 1]
+                        seldepth = parts[parts.index("seldepth") + 1] if "seldepth" in parts else "0"
+                        current_depth = f"{depth} / {seldepth}"
                         
-                        if board.turn == chess.BLACK:
-                            raw_score = -raw_score
-                        
-                        current_eval = raw_score / 100.0
-                        
-                        if "tt" in parts:
-                            current_tt = int(parts[parts.index("tt") + 1])
-                        if "nmp" in parts:
-                            current_nmp = int(parts[parts.index("nmp") + 1])
+                        if "nps" in parts:
+                            current_nps = int(parts[parts.index("nps") + 1])
+                            
+                        if "score" in parts:
+                            score_idx = parts.index("score")
+                            if parts[score_idx + 1] == "cp":
+                                raw_score = int(parts[score_idx + 2])
+                                if board.turn == chess.BLACK:
+                                    raw_score = -raw_score
+                                current_eval = raw_score / 100.0
+                                current_eval_text = f"{current_eval:+.2f}"
+                                
+                            elif parts[score_idx + 1] == "mate":
+                                mate_in = int(parts[score_idx + 2])
+                                current_eval = 10.0 if mate_in > 0 else -10.0
+                                if board.turn == chess.BLACK:
+                                    current_eval = -current_eval
+                                    mate_in = -mate_in
+                                current_eval_text = f"M{mate_in}"
+
+                        if "pv" in parts:
+                            pv_idx = parts.index("pv")
+                            current_pv = " ".join(parts[pv_idx + 1: pv_idx + 5]) # Keep just the first 4 moves
+
                     except (ValueError, IndexError):
                         pass
                     
-                    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_tt, current_nmp)
+                    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_eval_text, current_depth, current_nps, current_pv)
                     pygame.display.flip()
 
             if line.startswith("bestmove"):

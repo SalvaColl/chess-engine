@@ -20,7 +20,6 @@ int max_seldepth = 0;
 Board board;
 const int INF = 1e9;
 
-// Transposition Table Flags
 const int FLAG_EXACT = 0;
 const int FLAG_ALPHA = 1; 
 const int FLAG_BETA  = 2;  
@@ -28,12 +27,19 @@ const int FLAG_BETA  = 2;
 const int MAX_PLY = 100;
 Move killer_moves[MAX_PLY][2];
 
+int history_table[64][64] = {0};
+
 struct TTEntry {
     uint64_t key = 0;
     int score = 0;
     int depth = -1;
     int flag = 0;
     Move best_move;
+};
+
+struct ScoredMove {
+    Move move;
+    int score;
 };
 
 const int TT_SIZE = 1 << 22; 
@@ -235,7 +241,7 @@ int score_move(const Move& move, Move tt_move, int ply) {
         if (move == killer_moves[ply][1]) return 80000;
     }
 
-    return 0;
+    return history_table[move.from().index()][move.to().index()];
 }
 
 vector<Move> order_moves(const Movelist& moves, Move tt_move = Move(), int ply = 0) {
@@ -260,14 +266,55 @@ vector<Move> order_moves(const Movelist& moves, Move tt_move = Move(), int ply =
 
 int qsearch(int alpha, int beta, int ply) {
     if (ply > max_seldepth) max_seldepth = ply;
-    int stand_pat = evaluate();
-    if (stand_pat >= beta) return beta;
-    if (alpha < stand_pat) alpha = stand_pat;
+
+    uint64_t hash_key = board.zobrist();
+    TTEntry& tte = tt[hash_key & (TT_SIZE - 1)];
+    
+    if (tte.key == hash_key) {
+        if (tte.flag == FLAG_EXACT) return tte.score;
+        if (tte.flag == FLAG_ALPHA && tte.score <= alpha) return alpha;
+        if (tte.flag == FLAG_BETA && tte.score >= beta) return beta;
+    }
+
+    bool in_check = board.inCheck();
+    int stand_pat = -INF;
+
+    if (!in_check) {
+        stand_pat = evaluate();
+        if (stand_pat >= beta) return beta;
+        if (alpha < stand_pat) alpha = stand_pat;
+
+        if (stand_pat + 1000 < alpha) {
+            return alpha;
+        }
+    }
 
     Movelist moves;
-    movegen::legalmoves<movegen::MoveGenType::CAPTURE>(moves, board);
     
-    for (const auto& move : order_moves(moves, Move(), ply)) {
+    if (in_check) {
+        movegen::legalmoves(moves, board);
+    } else {
+        movegen::legalmoves<movegen::MoveGenType::CAPTURE>(moves, board);
+    }
+    
+    if (ply >= MAX_PLY) return in_check ? 0 : evaluate();
+    
+    ScoredMove smoves[256];
+    int move_count = moves.size();
+    for (int i = 0; i < move_count; i++) {
+        smoves[i] = {moves[i], score_move(moves[i], Move(), ply)};
+    }
+
+    for (int i = 0; i < move_count; i++) {
+        int best_idx = i;
+        for (int j = i + 1; j < move_count; j++) {
+            if (smoves[j].score > smoves[best_idx].score) {
+                best_idx = j;
+            }
+        }
+        swap(smoves[i], smoves[best_idx]);
+        Move move = smoves[i].move;
+
         board.makeMove(move);
         int score = -qsearch(-beta, -alpha, ply + 1);
         board.unmakeMove(move);
@@ -280,6 +327,10 @@ int qsearch(int alpha, int beta, int ply) {
 
 int alphabeta(int depth, int alpha, int beta, int ply) {
     if (ply > max_seldepth) max_seldepth = ply;
+
+    if (ply > 0 && (board.isRepetition() || board.isHalfMoveDraw())) {
+        return 0; 
+    }
 
     if ((nodes_visited & 2047) == 0) {
         if (stop_search) return 0;
@@ -317,7 +368,9 @@ int alphabeta(int depth, int alpha, int beta, int ply) {
 
     bool in_check = board.inCheck();
 
-    if (in_check) depth++;
+    if (in_check && ply < 16) {
+        depth++;
+    }
 
     if (depth <= 0) {
         return qsearch(alpha, beta, ply);
@@ -352,7 +405,13 @@ int alphabeta(int depth, int alpha, int beta, int ply) {
         if (in_check) {
             return -INF + ply; 
         }
-        return 0;
+        return 0; 
+    }
+
+    ScoredMove smoves[256];
+    int move_count = moves.size();
+    for (int i = 0; i < move_count; i++) {
+        smoves[i] = {moves[i], score_move(moves[i], tt_move, ply)};
     }
 
     int original_alpha = alpha;
@@ -360,28 +419,51 @@ int alphabeta(int depth, int alpha, int beta, int ply) {
     Move best_move = Move();
     int moves_searched = 0;
 
-    vector<Move> ordered = order_moves(moves, tt_move, ply);
+    for (int i = 0; i < move_count; i++) {
+        int best_idx = i;
+        for (int j = i + 1; j < move_count; j++) {
+            if (smoves[j].score > smoves[best_idx].score) {
+                best_idx = j;
+            }
+        }
+        swap(smoves[i], smoves[best_idx]);
+        Move move = smoves[i].move;
 
-    for (const auto& move : ordered) {
         bool is_capture = board.isCapture(move);
+
+        bool is_killer = false;
+        if (ply < MAX_PLY) {
+            is_killer = (move == killer_moves[ply][0] || move == killer_moves[ply][1]);
+        }
 
         board.makeMove(move);
         nodes_visited++;
-
-        int score = 0;
         bool gives_check = board.inCheck();
+        int score = 0;
 
-        if (moves_searched >= 3 && depth >= 3 && !is_capture && !in_check && !gives_check) {
-            int reduction = 1;
-            if (moves_searched >= 6 && depth >= 5) reduction = 2;
+        if (depth <= 3 && moves_searched > (depth * 4) && !is_capture && !in_check && !gives_check && !is_killer) {
+            board.unmakeMove(move);
+            continue; 
+        }
 
-            score = -alphabeta(depth - 1 - reduction, -alpha - 1, -alpha, ply + 1);
+        if (moves_searched == 0) {
+            score = -alphabeta(depth - 1, -beta, -alpha, ply + 1);
+        } else {
+            if (moves_searched >= 3 && depth >= 3 && !is_capture && !in_check && !gives_check && !is_killer) {
+                int reduction = (moves_searched >= 6 && depth >= 5) ? 2 : 1;
+                
+                score = -alphabeta(depth - 1 - reduction, -alpha - 1, -alpha, ply + 1);
+                
+                if (score > alpha) {
+                    score = -alphabeta(depth - 1, -alpha - 1, -alpha, ply + 1);
+                }
+            } else {
+                score = -alphabeta(depth - 1, -alpha - 1, -alpha, ply + 1);
+            }
 
-            if (score > alpha) {
+            if (score > alpha && score < beta) {
                 score = -alphabeta(depth - 1, -beta, -alpha, ply + 1);
             }
-        } else {
-            score = -alphabeta(depth - 1, -beta, -alpha, ply + 1);
         }
 
         board.unmakeMove(move);
@@ -397,37 +479,46 @@ int alphabeta(int depth, int alpha, int beta, int ply) {
         alpha = max(alpha, score);
 
         if (alpha >= beta) {
-            if (!is_capture && ply < MAX_PLY) {
-                if (killer_moves[ply][0] != move) {
-                    killer_moves[ply][1] = killer_moves[ply][0];
-                    killer_moves[ply][0] = move;
+            if (!is_capture) {
+                history_table[move.from().index()][move.to().index()] += depth * depth;
+                
+                if (ply < MAX_PLY) {
+                    if (killer_moves[ply][0] != move) {
+                        killer_moves[ply][1] = killer_moves[ply][0];
+                        killer_moves[ply][0] = move;
+                    }
                 }
             }
 
-            tte.key = hash_key;
-            tte.depth = depth;
-            tte.score = beta;
-            tte.flag = FLAG_BETA;
-            tte.best_move = move;
-
+            if (tte.key != hash_key || depth >= tte.depth) {
+                tte.key = hash_key;
+                tte.depth = depth;
+                tte.score = beta;
+                tte.flag = FLAG_BETA;
+                tte.best_move = move;
+            }
             return beta;
         }
     }
 
-    tte.key = hash_key;
-    tte.depth = depth;
-    tte.score = best_score;
-    tte.best_move = best_move;
-    if (best_score > original_alpha) {
-        tte.flag = FLAG_EXACT;
-    } else {
-        tte.flag = FLAG_ALPHA;
+    if (tte.key != hash_key || depth >= tte.depth) {
+        tte.key = hash_key;
+        tte.depth = depth;
+        tte.score = best_score;
+        tte.best_move = best_move;
+        tte.flag = (best_score > original_alpha) ? FLAG_EXACT : FLAG_ALPHA;
     }
 
     return best_score;
 }
 
 void handle_go(istringstream& ss) {
+
+    for (int i = 0; i < 64; i++) {
+        for (int j = 0; j < 64; j++) {
+            history_table[i][j] /= 8;
+        }
+    }
     memset(killer_moves, 0, sizeof(killer_moves));
     max_seldepth = 0;
     tt_cutoffs = 0;
@@ -455,33 +546,61 @@ void handle_go(istringstream& ss) {
 
     Move best_move = moves[0];
     auto sorted_root_moves = order_moves(moves);
+    int previous_score = 0; 
 
     for (int current_depth = 1; current_depth <= 64; current_depth++) {
-        Move iteration_best_move = sorted_root_moves[0];
-        int iteration_best_score = -INF;
+        
         int alpha = -INF;
         int beta = INF;
 
-        for (const auto& move : sorted_root_moves) {
-            board.makeMove(move);
+        if (current_depth >= 3) {
+            alpha = max(-INF, previous_score - 50);
+            beta = min(INF, previous_score + 50);
+        }
 
-            int extension = 0;
-            if (board.inCheck()) extension = 1;
+        Move iteration_best_move = sorted_root_moves[0];
+        int iteration_best_score = -INF;
 
-            int score = -alphabeta(current_depth - 1 + extension, -beta, -alpha, 1);
-            board.unmakeMove(move);
+        while (true) {
+            iteration_best_score = -INF;
+            int current_alpha = alpha; 
+
+            for (const auto& move : sorted_root_moves) {
+                board.makeMove(move);
+                int extension = 0;
+                if (board.inCheck()) extension = 1;
+
+                int score = -alphabeta(current_depth - 1 + extension, -beta, -current_alpha, 1);
+                board.unmakeMove(move);
+
+                if (stop_search) break;
+
+                if (score > iteration_best_score) {
+                    iteration_best_score = score;
+                    iteration_best_move = move;
+                }
+                if (score > current_alpha) {
+                    current_alpha = score; 
+                }
+            }
 
             if (stop_search) break;
 
-            if (score > iteration_best_score) {
-                iteration_best_score = score;
-                iteration_best_move = move;
+            if (iteration_best_score <= alpha) {
+                alpha = -INF;
+                continue; 
             }
-            if (score > alpha) alpha = score;
+            if (iteration_best_score >= beta) {
+                beta = INF;
+                continue; 
+            }
+
+            break; 
         }
 
         if (stop_search) break;
 
+        previous_score = iteration_best_score; 
         best_move = iteration_best_move;
 
         for (size_t i = 0; i < sorted_root_moves.size(); i++) {
@@ -515,7 +634,7 @@ void handle_go(istringstream& ss) {
             " nps " + to_string(nps) + 
             " pv " + uci::moveToUci(iteration_best_move));
 
-        if (!infinite_search && elapsed * 2 >= time_limit_ms) break;
+        if (!infinite_search && elapsed >= (time_limit_ms * 0.8)) break;
     }
 
     send("bestmove " + uci::moveToUci(best_move));
