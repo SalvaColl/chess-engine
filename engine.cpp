@@ -138,6 +138,39 @@ const int* eg_psts[6] = {eg_pawn_pst, knight_pst, bishop_pst, rook_pst, queen_ps
 
 const int phase_weights[6] = {0, 1, 1, 2, 4, 0};
 
+uint64_t file_masks[8];
+uint64_t adjacent_file_masks[8];
+uint64_t passed_pawn_masks[2][64];
+
+const int passed_pawn_bonus[8] = {0, 5, 10, 20, 35, 60, 100, 0};
+
+void init_eval_masks() {
+    for (int f = 0; f < 8; f++) {
+        file_masks[f] = 0x0101010101010101ULL << f;
+        adjacent_file_masks[f] = 0;
+        if (f > 0) adjacent_file_masks[f] |= file_masks[f - 1];
+        if (f < 7) adjacent_file_masks[f] |= file_masks[f + 1];
+    }
+    for (int sq = 0; sq < 64; sq++) {
+        int f = sq % 8;
+        int r = sq / 8;
+        
+        passed_pawn_masks[0][sq] = 0;
+        for (int r2 = r + 1; r2 < 8; r2++) {
+            passed_pawn_masks[0][sq] |= (1ULL << (r2 * 8 + f));
+            if (f > 0) passed_pawn_masks[0][sq] |= (1ULL << (r2 * 8 + f - 1));
+            if (f < 7) passed_pawn_masks[0][sq] |= (1ULL << (r2 * 8 + f + 1));
+        }
+        
+        passed_pawn_masks[1][sq] = 0;
+        for (int r2 = r - 1; r2 >= 0; r2--) {
+            passed_pawn_masks[1][sq] |= (1ULL << (r2 * 8 + f));
+            if (f > 0) passed_pawn_masks[1][sq] |= (1ULL << (r2 * 8 + f - 1));
+            if (f < 7) passed_pawn_masks[1][sq] |= (1ULL << (r2 * 8 + f + 1));
+        }
+    }
+}
+
 void send(string msg) {
     cout << msg << "\n" << flush;
 }
@@ -161,10 +194,25 @@ bool has_non_pawn_material(Color side) {
     return non_pawns != 0;
 }
 
+int tt_adjust_read(int score, int ply) {
+    if (score > INF - 100) return score - ply;
+    if (score < -INF + 100) return score + ply;
+    return score;
+}
+
+int tt_adjust_write(int score, int ply) {
+    if (score > INF - 100) return score + ply;
+    if (score < -INF + 100) return score - ply;
+    return score;
+}
+
 int evaluate() {
     int mg_w_score = 0, mg_b_score = 0;
     int eg_w_score = 0, eg_b_score = 0;
     int phase = 0;
+    
+    uint64_t w_pawns = board.pieces(PieceType::PAWN, Color::WHITE).getBits();
+    uint64_t b_pawns = board.pieces(PieceType::PAWN, Color::BLACK).getBits();
     
     PieceType types[] = {PieceType::PAWN, PieceType::KNIGHT, PieceType::BISHOP, PieceType::ROOK, PieceType::QUEEN, PieceType::KING};
     
@@ -182,6 +230,32 @@ int evaluate() {
             int val = piece_value(pt);
             mg_w_score += val + mg_psts[i][sq ^ 56];
             eg_w_score += val + eg_psts[i][sq ^ 56];
+            
+            int file = sq % 8;
+            int rank = sq / 8;
+            
+            if (pt == PieceType::PAWN) {
+                if ((passed_pawn_masks[0][sq] & b_pawns) == 0) {
+                    int bonus = passed_pawn_bonus[rank];
+                    mg_w_score += bonus;
+                    eg_w_score += bonus * 2; 
+                }
+                if ((adjacent_file_masks[file] & w_pawns) == 0) {
+                    mg_w_score -= 15; eg_w_score -= 15;
+                }
+                if ((file_masks[file] & w_pawns) > (1ULL << sq)) {
+                    mg_w_score -= 10; eg_w_score -= 10;
+                }
+            } else if (pt == PieceType::ROOK) {
+                if ((file_masks[file] & w_pawns) == 0) {
+                    if ((file_masks[file] & b_pawns) == 0) {
+                        mg_w_score += 15; eg_w_score += 15; 
+                    } else {
+                        mg_w_score += 10; eg_w_score += 10; 
+                    }
+                }
+            }
+            
             w_bits &= w_bits - 1;
         }
         
@@ -190,6 +264,32 @@ int evaluate() {
             int val = piece_value(pt);
             mg_b_score += val + mg_psts[i][sq];
             eg_b_score += val + eg_psts[i][sq];
+            
+            int file = sq % 8;
+            int rank = sq / 8;
+            
+            if (pt == PieceType::PAWN) {
+                if ((passed_pawn_masks[1][sq] & w_pawns) == 0) {
+                    int bonus = passed_pawn_bonus[7 - rank];
+                    mg_b_score += bonus;
+                    eg_b_score += bonus * 2; 
+                }
+                if ((adjacent_file_masks[file] & b_pawns) == 0) {
+                    mg_b_score -= 15; eg_b_score -= 15;
+                }
+                if ((file_masks[file] & b_pawns) > (1ULL << sq)) {
+                    mg_b_score -= 10; eg_b_score -= 10;
+                }
+            } else if (pt == PieceType::ROOK) {
+                if ((file_masks[file] & b_pawns) == 0) {
+                    if ((file_masks[file] & w_pawns) == 0) {
+                        mg_b_score += 15; eg_b_score += 15;
+                    } else {
+                        mg_b_score += 10; eg_b_score += 10;
+                    }
+                }
+            }
+            
             b_bits &= b_bits - 1;
         }
     }
@@ -271,9 +371,10 @@ int qsearch(int alpha, int beta, int ply) {
     TTEntry& tte = tt[hash_key & (TT_SIZE - 1)];
     
     if (tte.key == hash_key) {
-        if (tte.flag == FLAG_EXACT) return tte.score;
-        if (tte.flag == FLAG_ALPHA && tte.score <= alpha) return alpha;
-        if (tte.flag == FLAG_BETA && tte.score >= beta) return beta;
+        int tt_score = tt_adjust_read(tte.score, ply);
+        if (tte.flag == FLAG_EXACT) return tt_score;
+        if (tte.flag == FLAG_ALPHA && tt_score <= alpha) return alpha;
+        if (tte.flag == FLAG_BETA && tt_score >= beta) return beta;
     }
 
     bool in_check = board.inCheck();
@@ -351,18 +452,25 @@ int alphabeta(int depth, int alpha, int beta, int ply) {
     TTEntry& tte = tt[hash_key & (TT_SIZE - 1)];
     Move tt_move = Move();
 
+    alpha = max(alpha, -INF + ply);
+    beta = min(beta, INF - ply);
+    if (alpha >= beta) {
+        return alpha;
+    }
+
     if (tte.key == hash_key) {
         tt_move = tte.best_move;
         if (tte.depth >= depth && ply > 0) {
+            int tt_score = tt_adjust_read(tte.score, ply);
             if (tte.flag == FLAG_EXACT) {
                 tt_cutoffs++;
-                return tte.score;
+                return tt_score;
             }
-            if (tte.flag == FLAG_ALPHA && tte.score <= alpha) {
+            if (tte.flag == FLAG_ALPHA && tt_score <= alpha) {
                 tt_cutoffs++;
                 return alpha;
             }
-            if (tte.flag == FLAG_BETA && tte.score >= beta) {
+            if (tte.flag == FLAG_BETA && tt_score >= beta) {
                 tt_cutoffs++;
                 return beta;
             }
@@ -496,7 +604,7 @@ int alphabeta(int depth, int alpha, int beta, int ply) {
             if (tte.key != hash_key || depth >= tte.depth) {
                 tte.key = hash_key;
                 tte.depth = depth;
-                tte.score = beta;
+                tte.score = tt_adjust_write(beta, ply);
                 tte.flag = FLAG_BETA;
                 tte.best_move = move;
             }
@@ -507,7 +615,7 @@ int alphabeta(int depth, int alpha, int beta, int ply) {
     if (tte.key != hash_key || depth >= tte.depth) {
         tte.key = hash_key;
         tte.depth = depth;
-        tte.score = best_score;
+        tte.score = tt_adjust_write(best_score, ply);
         tte.best_move = best_move;
         tte.flag = (best_score > original_alpha) ? FLAG_EXACT : FLAG_ALPHA;
     }
@@ -667,6 +775,8 @@ void handle_position(istringstream& ss) {
 int main() {
     ios::sync_with_stdio(0);
     cin.tie(0);
+
+    init_eval_masks();
     
     string line, command;
     
