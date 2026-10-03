@@ -2,6 +2,8 @@ import pygame
 import chess
 import subprocess
 import sys
+import threading
+import queue
 
 ENGINE_PATH = "./engine.exe"
 engine = subprocess.Popen(
@@ -26,6 +28,20 @@ send_command("uci")
 wait_for("uciok")
 send_command("isready")
 wait_for("readyok")
+
+engine_out_queue = queue.Queue()
+def engine_reader():
+    while True:
+        try:
+            line = engine.stdout.readline()
+            if not line:
+                break
+            engine_out_queue.put(line.strip())
+        except Exception:
+            break
+
+reader_thread = threading.Thread(target=engine_reader, daemon=True)
+reader_thread.start()
 
 pygame.init()
 pygame.mixer.init()
@@ -73,13 +89,43 @@ def choose_color_menu():
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
+                return None
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_w:
                     return chess.WHITE
                 elif event.key == pygame.K_b:
                     return chess.BLACK
+
+def get_promotion_piece(color):
+    overlay = pygame.Surface((BOARD_SIZE, HEIGHT))
+    overlay.set_alpha(150)
+    overlay.fill((0, 0, 0))
+    screen.blit(overlay, (0, 0))
+    
+    menu_width, menu_height = 240, 80
+    menu_rect = pygame.Rect(BOARD_SIZE // 2 - menu_width // 2, HEIGHT // 2 - menu_height // 2, menu_width, menu_height)
+    pygame.draw.rect(screen, (220, 220, 220), menu_rect)
+    pygame.draw.rect(screen, (0, 0, 0), menu_rect, 3)
+    
+    pieces = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]
+    symbols = ['♕', '♖', '♗', '♘'] if color == chess.WHITE else ['♛', '♜', '♝', '♞']
+    
+    for i, p in enumerate(pieces):
+        text = font.render(symbols[i], True, (0, 0, 0))
+        rect = text.get_rect(center=(menu_rect.x + 30 + i * 60, menu_rect.y + 40))
+        screen.blit(text, rect)
+        
+    pygame.display.flip()
+    
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return chess.QUEEN
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = event.pos
+                if menu_rect.collidepoint(mx, my):
+                    index = (mx - menu_rect.x) // 60
+                    return pieces[index]
 
 def draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, eval_score, eval_text_str, depth_str, nps_val, pv_str, human_color):
     for r in range(8):
@@ -182,7 +228,7 @@ def draw_game_over_overlay(board, is_drawn):
 def reset_game():
     global board, selected_sq, valid_moves, last_move, right_clicked_squares
     global current_eval, current_eval_text, current_depth, current_nps, current_pv
-    global human_color
+    global human_color, engine_thinking
     
     board = chess.Board()
     selected_sq = None
@@ -195,91 +241,103 @@ def reset_game():
     current_depth = "0 / 0"
     current_nps = 0
     current_pv = ""
+    engine_thinking = False
+    
+    with engine_out_queue.mutex:
+        engine_out_queue.queue.clear()
     
     send_command("ucinewgame")
-    human_color = choose_color_menu()
-
-reset_game()
-running = True
-
-while running:
-    is_drawn = board.can_claim_draw() or board.is_repetition() or board.is_fifty_moves()
-    game_is_over = board.is_game_over() or is_drawn
     
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-            
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_r:
-                reset_game()
-                game_is_over = False
-                continue
+    color = choose_color_menu()
+    if color is None:
+        return False
+    human_color = color
+    return True
+
+
+try:
+    if not reset_game():
+        sys.exit()
+        
+    running = True
+
+    while running:
+        is_drawn = board.can_claim_draw() or board.is_repetition() or board.is_fifty_moves()
+        game_is_over = board.is_game_over() or is_drawn
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
                 
-        elif event.type == pygame.MOUSEBUTTONDOWN and not game_is_over:
-            x, y = pygame.mouse.get_pos()
-            col = x // SQ_SIZE
-            row = y // SQ_SIZE
-            
-            if human_color == chess.WHITE:
-                sq = (7 - row) * 8 + col
-            else:
-                sq = row * 8 + (7 - col)
-
-            if event.button == 1: 
-                right_clicked_squares.clear() 
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    if not reset_game():
+                        running = False
+                    game_is_over = False
+                    continue
+                    
+            elif event.type == pygame.MOUSEBUTTONDOWN and not game_is_over and not engine_thinking:
+                x, y = pygame.mouse.get_pos()
+                col = x // SQ_SIZE
+                row = y // SQ_SIZE
                 
-                if board.turn == human_color:
-                    if selected_sq is None:
-                        piece = board.piece_at(sq)
-                        if piece and piece.color == human_color:
-                            selected_sq = sq
-                            valid_moves = [m.to_square for m in board.legal_moves if m.from_square == sq]
-                    else:
-                        move = chess.Move(selected_sq, sq)
-                        
-                        if board.piece_at(selected_sq) and board.piece_at(selected_sq).piece_type == chess.PAWN:
-                            if chess.square_rank(sq) in [0, 7]:
-                                move = chess.Move(selected_sq, sq, promotion=chess.QUEEN)
-
-                        if move in board.legal_moves:
-                            is_capture = board.is_capture(move)
-                            board.push(move)
-                            last_move = None
-                            
-                            if is_capture and capture_sound:
-                                capture_sound.play()
-                            elif move_sound:
-                                move_sound.play()
-                        
-                        selected_sq = None
-                        valid_moves = []
-
-            elif event.button == 3:
-                if sq in right_clicked_squares:
-                    right_clicked_squares.remove(sq) 
+                if human_color == chess.WHITE:
+                    sq = (7 - row) * 8 + col
                 else:
-                    right_clicked_squares.add(sq)    
+                    sq = row * 8 + (7 - col)
 
-    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_eval_text, current_depth, current_nps, current_pv, human_color)
-    
-    if game_is_over:
-        draw_game_over_overlay(board, is_drawn)
+                if event.button == 1: 
+                    right_clicked_squares.clear() 
+                    
+                    if board.turn == human_color:
+                        if selected_sq is None:
+                            piece = board.piece_at(sq)
+                            if piece and piece.color == human_color:
+                                selected_sq = sq
+                                valid_moves = [m.to_square for m in board.legal_moves if m.from_square == sq]
+                        else:
+                            move = chess.Move(selected_sq, sq)
+                            
+                            if board.piece_at(selected_sq) and board.piece_at(selected_sq).piece_type == chess.PAWN:
+                                if chess.square_rank(sq) in [0, 7]:
+                                    promo_piece = get_promotion_piece(human_color)
+                                    move = chess.Move(selected_sq, sq, promotion=promo_piece)
+
+                            if move in board.legal_moves:
+                                is_capture = board.is_capture(move)
+                                board.push(move)
+                                last_move = move
+                                
+                                if is_capture and capture_sound:
+                                    capture_sound.play()
+                                elif move_sound:
+                                    move_sound.play()
+                            
+                            selected_sq = None
+                            valid_moves = []
+
+                elif event.button == 3:
+                    if sq in right_clicked_squares:
+                        right_clicked_squares.remove(sq) 
+                    else:
+                        right_clicked_squares.add(sq)    
+
+        draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_eval_text, current_depth, current_nps, current_pv, human_color)
         
-    pygame.display.flip()
-    
-    if board.turn != human_color and not game_is_over:
-        pygame.event.pump() 
-        
-        move_history = " ".join([m.uci() for m in board.move_stack])
-        send_command(f"position startpos moves {move_history}")
-        send_command("go movetime 1000")
-        
-        while True:
-            pygame.event.pump()
-            line = engine.stdout.readline().strip()
+        if game_is_over:
+            draw_game_over_overlay(board, is_drawn)
             
-            if line:
+        pygame.display.flip()
+        
+        if board.turn != human_color and not game_is_over and not engine_thinking:
+            move_history = " ".join([m.uci() for m in board.move_stack])
+            send_command(f"position startpos moves {move_history}")
+            send_command("go movetime 1000")
+            engine_thinking = True
+            
+        if engine_thinking:
+            while not engine_out_queue.empty():
+                line = engine_out_queue.get()
                 parts = line.split()
                 
                 if "info" in parts and "depth" in parts:
@@ -314,27 +372,25 @@ while running:
 
                     except (ValueError, IndexError):
                         pass
+
+                if line.startswith("bestmove"):
+                    best_move_str = line.split()[1]
+                    if best_move_str != "(none)":
+                        engine_move = chess.Move.from_uci(best_move_str)
+                        is_capture = board.is_capture(engine_move)
+                        
+                        board.push(engine_move)
+                        last_move = engine_move
+                        
+                        if is_capture and capture_sound:
+                            capture_sound.play()
+                        elif move_sound:
+                            move_sound.play()
+                            
+                    engine_thinking = False
                     
-                    draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares, current_eval, current_eval_text, current_depth, current_nps, current_pv, human_color)
-                    pygame.display.flip()
+        pygame.time.delay(16) 
 
-            if line.startswith("bestmove"):
-                best_move_str = line.split()[1]
-                break
-        
-        if best_move_str != "(none)":
-            engine_move = chess.Move.from_uci(best_move_str)
-            is_capture = board.is_capture(engine_move)
-            
-            pygame.time.wait(400)
-            board.push(engine_move)
-            last_move = engine_move
-            
-            if is_capture and capture_sound:
-                capture_sound.play()
-            elif move_sound:
-                move_sound.play()
-
-engine.terminate()
-pygame.quit()
-sys.exit()
+finally:
+    engine.terminate()
+    pygame.quit()
