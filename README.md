@@ -53,7 +53,7 @@ Developed with a focus on advanced search heuristics, memory-efficient pruning, 
 
 ### 1. Clone the Repository
 ```bash
-git clone <https://github.com/SalvaColl/chess-engine>
+git clone https://github.com/SalvaColl/chess-engine
 cd chess-engine
 ```
 
