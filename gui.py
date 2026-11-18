@@ -193,7 +193,7 @@ def draw_board(board, selected_sq, valid_moves, last_move, right_clicked_squares
     screen.blit(nps_text, (text_x, 140))
     screen.blit(nps_val_surf, (text_x, 160))
     
-    pv_label = ui_font_small.render("Best Line:", True, (150, 150, 150))
+    pv_label = ui_font_small.render("Best Move:", True, (150, 150, 150))
     screen.blit(pv_label, (text_x, 200))
     
     words = pv_str.split()
@@ -330,6 +330,10 @@ try:
         pygame.display.flip()
         
         if board.turn != human_color and not game_is_over and not engine_thinking:
+            current_nps = 0
+            current_depth = "0 / 0"
+            current_pv = ""
+
             move_history = " ".join([m.uci() for m in board.move_stack])
             send_command(f"position startpos moves {move_history}")
             send_command("go movetime 1000")

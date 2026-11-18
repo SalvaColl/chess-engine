@@ -393,6 +393,11 @@ vector<Move> order_moves(const Movelist& moves, Move tt_move = Move(), int ply =
 }
 
 int qsearch(int alpha, int beta, int ply) {
+    if (ply > 0 &&
+        (board.isRepetition() || board.isHalfMoveDraw())) {
+        return 0;
+    }
+
     if (shouldStopSearch()) return 0;
 
     if (ply > max_seldepth) max_seldepth = ply;
@@ -450,6 +455,7 @@ int qsearch(int alpha, int beta, int ply) {
         Move move = smoves[i].move;
 
         board.makeMove(move);
+        nodes_visited++;
         int score = -qsearch(-beta, -alpha, ply + 1);
         board.unmakeMove(move);
         
@@ -461,6 +467,8 @@ int qsearch(int alpha, int beta, int ply) {
 }
 
 int alphabeta(int depth, int alpha, int beta, int ply) {
+    nodes_visited++;
+
     if (shouldStopSearch()) return 0;
 
     if (ply > max_seldepth) max_seldepth = ply;
@@ -569,7 +577,6 @@ int alphabeta(int depth, int alpha, int beta, int ply) {
         }
 
         board.makeMove(move);
-        nodes_visited++;
         bool gives_check = board.inCheck();
         int score = 0;
 
@@ -697,11 +704,13 @@ void handle_go(istringstream& ss) {
         while (true) {
             iteration_best_score = -INF;
             int current_alpha = alpha; 
+            if (current_alpha >= beta) {
+                break;
+            }
 
             for (const auto& move : sorted_root_moves) {
                 board.makeMove(move);
                 int extension = 0;
-                if (board.inCheck()) extension = 1;
 
                 int score = -alphabeta(current_depth - 1 + extension, -beta, -current_alpha, 1);
                 board.unmakeMove(move);
@@ -808,7 +817,7 @@ int main() {
         
         if (command == "uci") {
             send("id name CP_Engine");
-            send("id author You");
+            send("id author Salva");
             send("uciok");
         } 
         else if (command == "isready") {

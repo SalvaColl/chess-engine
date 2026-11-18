@@ -40,7 +40,7 @@ Developed with a focus on advanced search heuristics, memory-efficient pruning, 
 * **Interactive Play:** Fully playable 2D graphical board using `pygame` and `python-chess`.
 * **Multithreaded Engine Handling:** Asynchronous, non-blocking background threads ensure a smooth 60 FPS UI while the engine calculates.
 * **Quality of Life Menus:** Interactive side-selection on startup, graphical Game Over / Restart overlays, and a visual Pawn Underpromotion menu.
-* **Audio-Visuals:** Integrated sound effects, piece assets, and real-time engine metric displays (Eval, Depth, NPS, Best Line).
+* **Audio-Visuals:** Integrated sound effects, piece assets, and real-time engine metric displays (Eval, Depth, NPS, Best Move).
 * **Process Safety:** Graceful subprocess cleanup prevents hidden zombie processes on exit.
 
 ---
