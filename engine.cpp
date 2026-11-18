@@ -144,6 +144,34 @@ uint64_t passed_pawn_masks[2][64];
 
 const int passed_pawn_bonus[8] = {0, 5, 10, 20, 35, 60, 100, 0};
 
+uint64_t timeCheckCounter = 0;
+
+bool shouldStopSearch() {
+    if (stop_search) {
+        return true;
+    }
+
+    if (infinite_search) {
+        return false;
+    }
+
+    if ((++timeCheckCounter & 2047) != 0) {
+        return false;
+    }
+
+    auto now = high_resolution_clock::now();
+    auto elapsed = duration_cast<milliseconds>(
+        now - start_time
+    ).count();
+
+    if (elapsed >= time_limit_ms) {
+        stop_search = true;
+        return true;
+    }
+
+    return false;
+}
+
 void init_eval_masks() {
     for (int f = 0; f < 8; f++) {
         file_masks[f] = 0x0101010101010101ULL << f;
@@ -365,9 +393,11 @@ vector<Move> order_moves(const Movelist& moves, Move tt_move = Move(), int ply =
 }
 
 int qsearch(int alpha, int beta, int ply) {
+    if (shouldStopSearch()) return 0;
+
     if (ply > max_seldepth) max_seldepth = ply;
 
-    uint64_t hash_key = board.zobrist();
+    uint64_t hash_key = board.hash();
     TTEntry& tte = tt[hash_key & (TT_SIZE - 1)];
     
     if (tte.key == hash_key) {
@@ -423,6 +453,7 @@ int qsearch(int alpha, int beta, int ply) {
         int score = -qsearch(-beta, -alpha, ply + 1);
         board.unmakeMove(move);
         
+        if (stop_search) return 0;
         if (score >= beta) return beta;
         if (score > alpha) alpha = score;
     }
@@ -430,25 +461,15 @@ int qsearch(int alpha, int beta, int ply) {
 }
 
 int alphabeta(int depth, int alpha, int beta, int ply) {
+    if (shouldStopSearch()) return 0;
+
     if (ply > max_seldepth) max_seldepth = ply;
 
     if (ply > 0 && (board.isRepetition() || board.isHalfMoveDraw())) {
         return 0; 
     }
 
-    if ((nodes_visited & 2047) == 0) {
-        if (stop_search) return 0;
-        if (!infinite_search) {
-            auto now = high_resolution_clock::now();
-            auto elapsed = duration_cast<milliseconds>(now - start_time).count();
-            if (elapsed >= time_limit_ms) {
-                stop_search = true;
-                return 0;
-            }
-        }
-    }
-
-    uint64_t hash_key = board.zobrist();
+    uint64_t hash_key = board.hash();
     TTEntry& tte = tt[hash_key & (TT_SIZE - 1)];
     Move tt_move = Move();
 
@@ -654,6 +675,7 @@ void handle_go(istringstream& ss) {
     start_time = high_resolution_clock::now();
     stop_search = false;
     nodes_visited = 0;
+    timeCheckCounter = 0;
 
     Move best_move = moves[0];
     auto sorted_root_moves = order_moves(moves);
