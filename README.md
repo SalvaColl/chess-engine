@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)
 ![Status](https://img.shields.io/badge/Status-Active-success.svg?style=for-the-badge)
 
-**CPEngine** is a high-performance, UCI-compliant chess engine written in C++, paired with a custom graphical user interface built in Python (Pygame).
+**CPEngine** is a C++17 chess engine with a custom Python (Pygame) graphical interface. It began as an exploration of minimax and alpha-beta pruning and grew into a project focused on efficient game-tree search, selective pruning, move ordering, and handcrafted position evaluation. It has an estimated ELO of 2294.
 
 Developed with a focus on advanced search heuristics, memory-efficient pruning, and strategic bitboard evaluation, CPEngine is capable of defeating advanced human players and has achieved strong results in fast time-control testing against established engines (est. 2100+ Elo).
 
@@ -99,13 +99,27 @@ Because CPEngine implements standard UCI, you can load `engine.exe` directly int
 
 Point the GUI's engine configuration to `engine.exe`.
 
----
+## 📊 Performance and Benchmarks
 
-## 📊 Performance & Benchmarks
+### 100-game match against strength-limited Stockfish
 
-In internal testing via Cutechess (1 second/move time control), CPEngine achieved a performance rating of 2203 ELO against Stockfish.
+CPEngine was tested using Cute Chess against Stockfish configured with an **1800 Elo strength setting**, with **1 second per move** for each engine.
 
----
+| Metric | Result |
+|---|---:|
+| Total games | **100** |
+| CPEngine wins | **93** |
+| CPEngine losses | **4** |
+| Draws | **3** |
+| CPEngine match score | **94.5 / 100 (94.5%)** |
+| Estimated Elo | **2294 ± 176.8** |
+
+The results include 50 games with CPEngine playing White and 50 with CPEngine playing Black:
+
+| CPEngine color | Wins | Losses | Draws |
+|---|---:|---:|---:|
+| White | 48 | 1 | 1 |
+| Black | 45 | 3 | 2 |
 
 ## 📜 License
 Distributed under the MIT License. See `LICENSE` for more information.
